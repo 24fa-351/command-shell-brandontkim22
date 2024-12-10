@@ -8,13 +8,13 @@
 #include "exec_args.h"
 #include "path_funcs.h"
 
-#define MAX_LINE 80
+#define MAX_LINE 1000
 
 int main(int argc, char *argv[])
 {
     char line[MAX_LINE];
-    char absolute_path[1000];
-    char *words[1000];
+    char absolute_path[MAX_LINE];
+    char *words[MAX_LINE];
 
     while (1)
     {
@@ -28,6 +28,13 @@ int main(int argc, char *argv[])
             break;
         }
 
+        // check if the user entered nothing. Have to check for empty
+        // string since we removed the newline character
+        if (strcmp(line, "") == 0)
+        {
+            continue;
+        }
+
         // split the line into words
         split_line(line, words, ' ');
 
@@ -37,18 +44,14 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-        // print the separated args from the line
+        int length_of_array = 0;
+        // calculate the length of the array
         for (int ix = 0; words[ix] != NULL; ix++)
         {
-            printf("words[%d] = %s\n", ix, words[ix]);
+            length_of_array++;
         }
 
-        // want to check for piping and redirects first. if no piping do below
-        // otherwise do piping and redirect modified funcs of below
-
-        process_command(words, absolute_path);
-
-        printf("You Entered: %s\n", line);
+        process_command(words, absolute_path, length_of_array);
     }
     return 0;
 }

@@ -9,8 +9,4 @@ void split_line(char *line, char *words[], char delimiter);
 
 bool find_absolute_path(char *command, char *absolute_path);
 
-int check_for_redir_input(char *words[]);
-
-void check_for_redir_output(char *words[]);
-
 #endif

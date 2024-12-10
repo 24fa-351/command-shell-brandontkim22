@@ -7,98 +7,109 @@
 
 #include "exec_args.h"
 #include "path_funcs.h"
+#include "handle_operations.h"
 
-#define ADD_OR_OVERWRITE_ENV_VAR 1
-#define ADD_BUT_DO_NOT_OVERWRITE_VAR 0
 #define MAX_LINE 1000
+#define READ_SIDE 0
+#define WRITE_SIDE 1
 
-void handle_cd(char *words[])
+void copy_words_from_to(char *words[], char *new_words[], int start, int end)
 {
-    char cwd[MAX_LINE];
-    chdir(words[1]);
-    printf("Changed directory to %s\n", getcwd(cwd, MAX_LINE));
-}
-
-void handle_pwd(char *words[])
-{
-    char cwd[MAX_LINE];
-    printf("%s\n", getcwd(cwd, MAX_LINE));
-}
-
-void handle_set(char *words[])
-{
-    if (words[1] == NULL || words[2] == NULL)
+    for (int dest_ix = 0; dest_ix < end - start + 1; dest_ix++)
     {
-        printf("Invalid number of arguments\n");
-        return;
+        new_words[dest_ix] = words[start + dest_ix];
     }
+    new_words[end - start + 1] = NULL;
+}
 
-    if (getenv(words[1]) != NULL)
+void execute_command(char *words[], char *absolute_path, int background)
+{
+    pid_t child_pid = fork();
+    if (child_pid == 0)
     {
-        printf("Overwriting existing environment variable %s with %s\n",
-               words[1], words[2]);
-        setenv(words[1], words[2], ADD_OR_OVERWRITE_ENV_VAR);
-        return;
+        // check for input and output redirection
+        handle_redirection(words);
+
+        // execute_command(words, absolute_path, background);
+        execve(absolute_path, words, NULL);
+        printf("Command not found: %s\n", words[0]);
+        perror("Error");
+        exit(1);
     }
     else
     {
-        printf("Setting new environment variable %s with %s\n",
-               words[1], words[2]);
-        setenv(words[1], words[2], ADD_BUT_DO_NOT_OVERWRITE_VAR);
+        if (background == 1)
+        {
+            waitpid(child_pid, NULL, 0);
+        }
     }
-}
-
-void handle_unset(char *words[])
-{
-    if (words[1] == NULL)
-    {
-        printf("Invalid number of arguments\n");
-        return;
-    }
-
-    if (getenv(words[1]) == NULL)
-    {
-        printf("Environment variable %s does not exist\n", words[1]);
-        return;
-    }
-
-    printf("Unsetting environment variable %s\n", words[1]);
-    unsetenv(words[1]);
-    printf("Removed environment variable %s\n", words[1]);
-
     return;
 }
 
-void get_env_var(char *env_var, char *value_of_env_var)
+void execute_piped_commands(char *words[], char *absolute_path, int background,
+                            int index_of_pipe, int length_of_array)
 {
-    if (getenv(env_var) == NULL)
+    char *first_cmd[MAX_LINE];
+    char *second_cmd[MAX_LINE];
+
+    // copy the first command into first_cmd
+    // and the second command into second_cmd
+    copy_words_from_to(words, first_cmd, 0, index_of_pipe - 1);
+    copy_words_from_to(words, second_cmd, index_of_pipe + 1, length_of_array);
+
+    int pipefd[2];
+    pipe(pipefd);
+
+    int command1_pid = fork();
+    if (command1_pid == 0)
     {
-        printf("Environment variable %s does not exist\n", env_var);
-        strcpy(value_of_env_var, "");
-        return;
+        check_for_input_redirect(first_cmd);
+
+        close(pipefd[READ_SIDE]);
+        dup2(pipefd[WRITE_SIDE], STDOUT_FILENO);
+        close(pipefd[WRITE_SIDE]);
+
+        execve(absolute_path, first_cmd, NULL);
+        printf("Command not found: %s\n", absolute_path);
+        perror("Error");
+        exit(1);
     }
 
-    strcpy(value_of_env_var, getenv(env_var));
-}
-
-void check_for_env_var(char *words[])
-{
-    int first_char_of_word = 0;
-    for (int ix = 0; words[ix] != NULL; ix++)
+    int command2_pid = fork();
+    if (command2_pid == 0)
     {
-        if (words[ix][first_char_of_word] == '$')
+        check_for_output_redirect(second_cmd);
+
+        close(pipefd[WRITE_SIDE]);
+        dup2(pipefd[READ_SIDE], STDIN_FILENO);
+        close(pipefd[READ_SIDE]);
+
+        char absolute_path2[MAX_LINE];
+        if (!find_absolute_path(second_cmd[0], absolute_path2))
         {
-            char env_var[MAX_LINE]; // might change MAX_LINE to new name
-            char value_of_env_var[MAX_LINE];
-
-            strcpy(env_var, words[ix] + 1);
-            get_env_var(env_var, value_of_env_var);
-            strcpy(words[ix], value_of_env_var);
+            printf("Command not found: %s\n", second_cmd[0]);
+            return;
         }
+
+        execve(absolute_path2, second_cmd, NULL);
+        printf("Command not found: %s\n", absolute_path2);
+        perror("Error");
+        exit(1);
+    }
+
+    close(pipefd[READ_SIDE]);
+    close(pipefd[WRITE_SIDE]);
+
+    if (background == 1)
+    {
+        waitpid(command1_pid, NULL, 0);
+        // printf("command 1 exited\n");
+        waitpid(command2_pid, NULL, 0);
+        // printf("command 2 exited\n");
     }
 }
 
-void process_command(char *words[], char *absolute_path)
+void process_command(char *words[], char *absolute_path, int length_of_array)
 {
     if (strcmp(words[0], "cd") == 0) // test cd
     {
@@ -128,62 +139,34 @@ void process_command(char *words[], char *absolute_path)
             printf("Command not found: %s\n", words[0]);
             return;
         }
-        printf("absolute_path = %s\n", absolute_path);
 
         // check for any environment variables in the command
         check_for_env_var(words);
 
-        pid_t pid = fork();
-        if (pid == 0)
+        // check for & to run in background.
+        // (1 = Do not run in background, 0 = Run in background)
+        int background = 1;
+        for (int ix = 0; words[ix] != NULL; ix++)
         {
-            // check for input and output redirection
-            for (int ix = 0; words[ix] != NULL; ix++)
+            if (strcmp(words[ix], "&") == 0)
             {
-                if (strcmp(words[ix], "<") == 0)
-                {
-                    int input_fd = open(words[ix + 1], O_RDONLY);
-                    if (input_fd == -1)
-                    {
-                        printf("Error opening file %s\n", words[ix + 1]);
-                        return;
-                    }
-                    dup2(input_fd, STDIN_FILENO);
-                    close(input_fd);
-                    words[ix] = NULL;
-                    continue;
-                }
-                if (strcmp(words[ix], ">") == 0)
-                {
-                    printf("Redirecting output to file %s\n", words[ix + 1]);
-                    int output_fd = open(words[ix + 1], O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-                    if (output_fd == -1)
-                    {
-                        printf("Error opening file %s\n", words[ix + 1]);
-                        return;
-                    }
-                    dup2(output_fd, STDOUT_FILENO);
-                    close(output_fd);
-                    words[ix] = NULL;
-                    break;
-                }
+                background = 0;
+                words[ix] = NULL;
+                break;
             }
+        }
 
-            execve(absolute_path, words, NULL);
-            printf("Command not found: %s\n", words[0]);
-            perror("Error");
-            exit(1);
+        // if no piping, execute the single command
+        int index_of_pipe = check_for_pipe(words);
+        if (index_of_pipe != -1)
+        {
+            execute_piped_commands(words, absolute_path, background,
+                                   index_of_pipe, length_of_array);
+            return;
         }
         else
         {
-            wait(NULL);
+            execute_command(words, absolute_path, background);
         }
-
-        return;
     }
-}
-
-void execute_piped_commands(char *words[], char *absolute_path)
-{
-    printf("Piping not implemented yet\n");
-    return;
 }

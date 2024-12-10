@@ -60,35 +60,3 @@ bool find_absolute_path(char *command, char *absolute_path)
     }
     return false;
 }
-
-int check_for_redir_input(char *words[])
-{
-    int input_fd = STDIN_FILENO;
-    for (int ix = 0; words[ix] != NULL; ix++)
-    {
-        if (strcmp(words[ix], "<") == 0)
-        {
-            int input_fd = open(words[ix + 1], O_RDONLY);
-            if (input_fd == -1)
-            {
-                printf("Error opening file %s\n", words[ix + 1]);
-                return 1;
-            }
-            words[ix] = NULL;
-            break;
-        }
-    }
-    return input_fd;
-}
-
-void check_for_redir_output(char *words[])
-{
-    for (int ix = 0; words[ix] != NULL; ix++)
-    {
-        if (strcmp(words[ix], ">") == 0)
-        {
-            return;
-        }
-    }
-    return;
-}
